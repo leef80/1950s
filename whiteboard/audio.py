@@ -175,7 +175,7 @@ def _split(text):
 
 def _trim(x, thresh=0.01):
     idx = np.where(np.abs(x) > thresh * np.abs(x).max())[0]
-    return x[max(0, idx[0] - 400): idx[-1] + 2000] if len(idx) else x
+    return x[max(0, idx[0] - 1600): idx[-1] + 2400] if len(idx) else x   # 句首留足余量，别剪掉辅音
 
 
 # ---------------------------------------------------------------- 马克笔沙沙声
