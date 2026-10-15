@@ -1,7 +1,8 @@
-"""音轨：旁白（本地 Kokoro 语音合成）+ 1950 年代风格轻爵士配乐 + 马克笔沙沙声。
+"""音轨：旁白（本地 ZipVoice 语音合成）+ 1950 年代风格轻爵士配乐 + 马克笔沙沙声。
 
 全部在本地生成：
-- 旁白用 sherpa-onnx 运行 Kokoro v1.1-zh 模型（Apache-2.0），首次运行自动下载。
+- 旁白用 sherpa-onnx 运行 ZipVoice（零样本语音合成，模仿一段参考录音的音色和语气），
+  首次运行自动下载模型。相比逐字拼读的模型，它的分句和连读自然得多。
 - 配乐用 numpy 合成：FM 电钢琴和弦、行走贝斯、鼓刷，摇摆节奏。
 - 沙沙声根据时间线上每一笔的起止时间和速度，由滤波噪声生成。
 """
@@ -17,11 +18,19 @@ from scipy.signal import butter, resample_poly, sosfilt
 SR = 44100
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(HERE, "build")
-MODEL_DIR = os.path.join(BUILD, "kokoro-multi-lang-v1_1")
-MODEL_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-             "tts-models/kokoro-multi-lang-v1_1.tar.bz2")
-VOICE_SID = 63              # 低沉的中文男声
-VOICE_SPEED = 0.95
+RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+MODEL_DIR = os.path.join(BUILD, "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia")
+MODEL_URL = RELEASE + "tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2"
+VOCODER = os.path.join(BUILD, "vocos_24khz.onnx")
+VOCODER_URL = RELEASE + "vocoder-models/vocos_24khz.onnx"
+# 参考男声：sherpa-onnx 完整版 ZipVoice 包里自带的示例录音（只取这一个文件）
+PROMPT_WAV = os.path.join(BUILD, "zipvoice_prompt.wav")
+PROMPT_ARCHIVE_URL = RELEASE + "tts-models/sherpa-onnx-zipvoice-distill-zh-en-emilia.tar.bz2"
+PROMPT_TEXT = "周日被我射熄火了，所以今天是周一。"
+# 参考录音语速偏慢。模型自带的 speed 参数大于 1 时短句会被截断，
+# 所以按原速合成，再用 ffmpeg 的 atempo 变速不变调。
+TEMPO = 1.35
+FLOW_STEPS = 4
 SENTENCE_GAP = 0.32         # 句与句之间的停顿（秒）
 
 # 音量（线性幅度）。旁白峰值约 0.85、说话时平均约 -17 dB。
@@ -72,48 +81,66 @@ def smooth_env(env, ms):
 _tts = None
 
 
-def _ensure_model():
-    if os.path.exists(os.path.join(MODEL_DIR, "model.onnx")):
-        return
+def _download(url, path):
+    print(f"下载 {os.path.basename(url)} ……", flush=True)
     os.makedirs(BUILD, exist_ok=True)
-    archive = os.path.join(BUILD, "kokoro.tar.bz2")
-    print("下载语音模型（约 350MB）……", flush=True)
-    urllib.request.urlretrieve(MODEL_URL, archive)
-    with tarfile.open(archive) as t:
-        t.extractall(BUILD)
-    os.remove(archive)
+    urllib.request.urlretrieve(url, path + ".part")
+    os.replace(path + ".part", path)
+
+
+def _ensure_model():
+    if not os.path.exists(os.path.join(MODEL_DIR, "lexicon.txt")):
+        archive = MODEL_DIR + ".tar.bz2"
+        _download(MODEL_URL, archive)
+        with tarfile.open(archive) as t:
+            t.extractall(BUILD)
+        os.remove(archive)
+    if not os.path.exists(VOCODER):
+        _download(VOCODER_URL, VOCODER)
+    if not os.path.exists(PROMPT_WAV):
+        archive = PROMPT_WAV + ".tar.bz2"
+        _download(PROMPT_ARCHIVE_URL, archive)          # 约 630MB，只为取出参考录音
+        with tarfile.open(archive) as t:
+            member = next(m for m in t.getmembers() if m.name.endswith("/prompt.wav"))
+            with t.extractfile(member) as src, open(PROMPT_WAV, "wb") as dst:
+                dst.write(src.read())
+        os.remove(archive)
+
+
+_prompt = None
 
 
 def _engine():
-    global _tts
+    global _tts, _prompt
     if _tts is None:
         import sherpa_onnx
         _ensure_model()
         m = MODEL_DIR + "/"
-        cfg = sherpa_onnx.OfflineTtsConfig(
-            model=sherpa_onnx.OfflineTtsModelConfig(
-                kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
-                    model=m + "model.onnx", voices=m + "voices.bin", tokens=m + "tokens.txt",
-                    data_dir=m + "espeak-ng-data", dict_dir=m + "dict",
-                    lexicon=m + "lexicon-us-en.txt," + m + "lexicon-zh.txt"),
-                num_threads=os.cpu_count() or 4),
-            rule_fsts=m + "date-zh.fst," + m + "phone-zh.fst," + m + "number-zh.fst")
+        cfg = sherpa_onnx.OfflineTtsConfig(model=sherpa_onnx.OfflineTtsModelConfig(
+            zipvoice=sherpa_onnx.OfflineTtsZipvoiceModelConfig(
+                tokens=m + "tokens.txt", encoder=m + "encoder.int8.onnx",
+                decoder=m + "decoder.int8.onnx", vocoder=VOCODER,
+                data_dir=m + "espeak-ng-data", lexicon=m + "lexicon.txt"),
+            num_threads=os.cpu_count() or 4))
         _tts = sherpa_onnx.OfflineTts(cfg)
+        x, sr = read_wav_mono(PROMPT_WAV)
+        _prompt = (x.tolist(), sr)
     return _tts
 
 
 def narrate(text, cache_name):
     """把一段旁白（按句号/问号切句）合成为 SR 采样率的单声道数组，结果缓存为 wav。"""
     os.makedirs(BUILD, exist_ok=True)
-    path = os.path.join(BUILD, f"narration_{cache_name}.wav")
+    path = os.path.join(BUILD, f"narration_zipvoice_t{TEMPO}_{cache_name}.wav")
     stamp = path + ".txt"
     if os.path.exists(path) and os.path.exists(stamp) and open(stamp).read() == text:
         return read_wav_mono(path)[0]
     tts = _engine()
     pieces = []
     for sent in _split(text):
-        a = tts.generate(sent, sid=VOICE_SID, speed=VOICE_SPEED)
-        x = np.array(a.samples, dtype=np.float32)
+        a = tts.generate(sent, prompt_text=PROMPT_TEXT, prompt_samples=_prompt[0],
+                         sample_rate=_prompt[1], speed=1.0, num_steps=FLOW_STEPS)
+        x = _atempo(np.array(a.samples, dtype=np.float32), a.sample_rate, TEMPO)
         x = resample_poly(x, SR, a.sample_rate) if a.sample_rate != SR else x
         pieces += [_trim(x), np.zeros(int(SENTENCE_GAP * SR), np.float32)]
     x = np.concatenate(pieces[:-1])
@@ -121,6 +148,17 @@ def narrate(text, cache_name):
     write_wav(path, x)
     open(stamp, "w").write(text)
     return x
+
+
+def _atempo(x, sr, k):
+    """变速不变调（ffmpeg atempo，WSOLA）。"""
+    import subprocess
+    import imageio_ffmpeg
+    r = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-loglevel", "error",
+                        "-f", "f32le", "-ar", str(sr), "-ac", "1", "-i", "-",
+                        "-filter:a", f"atempo={k}", "-f", "f32le", "-"],
+                       input=x.astype(np.float32).tobytes(), capture_output=True, check=True)
+    return np.frombuffer(r.stdout, np.float32).copy()
 
 
 def _split(text):
