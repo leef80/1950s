@@ -304,11 +304,81 @@ def end_card():
 SCENES = [title_card, morning, train, office, personality_test, meeting, party, night,
           end_card]
 
+# 旁白：每个场景开始后 NARRATION_START 秒开始念。数字写成汉字，读得更自然。
+NARRATION_START = 0.7
+NARRATION = {
+    "title_card": "一九五六年，记者威廉怀特出版了一本书，书名叫，组织人。"
+                  "这是书里那种人的一天。",
+    "morning": "早上六点四十五分，芝加哥郊外的帕克森林。"
+               "这里的房子出自同一张图纸，车道上停着同一款新车。"
+               "三扇门在同一分钟打开，丈夫们提着同样的公文包出门，妻子们站在门口挥手。"
+               "在这里，和邻居不一样，才是需要解释的事。",
+    "train": "七点三十二分，开往芝加哥的通勤火车。"
+             "每个人都坐在习惯的位置上，翻开同一份报纸。"
+             "没有人交谈，也不需要交谈。他们要去的，其实是同一个地方。",
+    "office": "八点五十九分，公司总部。大钟就要指向九点，一排一模一样的人走进同一扇门。"
+              "怀特说，这些人不只是为组织工作，他们在精神上也属于组织。"
+              "他们把前途、身份，甚至想法，都交给了它。",
+    "personality_test": "上午十点半，人事部的人格测试。"
+                        "你喜欢一个人读书，还是参加团体活动？"
+                        "你会怀疑上司，还是相信公司知道什么对你最好？"
+                        "正确答案只有一个：最合群的那一个。"
+                        "怀特在书末甚至教读者如何作弊。尽量显得平庸、乐观、毫无棱角。",
+    "meeting": "下午两点，委员会会议。上司问：大家都同意吧？每个人都说，同意。"
+               "他心里其实有不同的想法，但他也说了，同意。"
+               "在组织里，群体被当作智慧的源泉，而个人的异议，只会被看成不合群。",
+    "party": "傍晚六点半，后院的烧烤聚会。邻居们聊着草坪、新车和升职。"
+             "这时，他收到一纸调令：下个月，调往堪萨斯城。他不会拒绝。"
+             "反正下一个郊区，也会有一样的房子，一样的邻居，一样的聚会。",
+    "night": "晚上十点半。西装挂好，公文包放好，闹钟定在六点半。明天，再来一遍。",
+    "end_card": "他得到了安稳的一生。代价是，他属于组织。",
+}
+
+
+def build(picks):
+    """生成场景、旁白，并让每个场景至少和它的旁白一样长。"""
+    import audio
+    scenes, voices = [], []
+    for i in picks:
+        fn = SCENES[i]
+        tl = fn()
+        voice = audio.narrate(NARRATION[fn.__name__], fn.__name__)
+        tl.min_duration = NARRATION_START + len(voice) / audio.SR + 1.6
+        scenes.append(tl)
+        voices.append(voice)
+    return scenes, voices
+
+
+def soundtrack(scenes, voices, wav_path):
+    import audio
+    import numpy as np
+    offsets = list(np.cumsum([0] + [tl.duration for tl in scenes[:-1]]))
+    total = sum(tl.duration for tl in scenes)
+    narr = np.zeros(int(total * audio.SR) + audio.SR)
+    for off, v in zip(offsets, voices):
+        i = int((off + NARRATION_START) * audio.SR)
+        narr[i:i + len(v)] += v
+    print("合成配乐和马克笔声……", flush=True)
+    mixed = audio.mix(narr, audio.music_track(total),
+                      audio.marker_track(scenes, offsets, total), total)
+    audio.write_wav(wav_path, mixed)
+
 
 if __name__ == "__main__":
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "organization_man_day.mp4")
+    import subprocess
+    import imageio_ffmpeg
+    here = os.path.dirname(os.path.abspath(__file__))
+    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "organization_man_day.mp4")
     picks = [int(a) for a in sys.argv[2:]] or range(len(SCENES))
-    scenes = [SCENES[i]() for i in picks]
+    scenes, voices = build(picks)
     print(f"总时长 {sum(s.duration for s in scenes):.0f} 秒")
-    render_film(scenes, out)
+    os.makedirs(os.path.join(here, "build"), exist_ok=True)
+    silent = os.path.join(here, "build", "video_only.mp4")
+    wav = os.path.join(here, "build", "soundtrack.wav")
+    soundtrack(scenes, voices, wav)
+    render_film(scenes, silent)
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error",
+                    "-i", silent, "-i", wav, "-map", "0:v", "-map", "1:a",
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
+                    "-movflags", "+faststart", out], check=True)
+    print("完成：", out)

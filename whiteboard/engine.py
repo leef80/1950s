@@ -146,13 +146,15 @@ class Timeline:
 
     def __init__(self, duration=None):
         self._duration = duration
+        self.min_duration = 0.0     # 例如旁白比画面长时，用它把场景撑长
+        self.narration = ""
         self.items = []
 
     @property
     def duration(self):
         if self._duration is not None:
             return self._duration
-        return max(t1 for _, t1, _, _ in self.items) + self.HOLD
+        return max(max(t1 for _, t1, _, _ in self.items) + self.HOLD, self.min_duration)
 
     def strokes(self, t0, t1, strokes, width=4.5, gap=0.1):
         """在 [t0,t1] 内按长度比例依次画完一组笔画（笔画之间有抬笔间隔）。"""
