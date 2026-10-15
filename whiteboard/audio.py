@@ -1,8 +1,12 @@
-"""音轨：旁白（本地 ZipVoice 语音合成）+ 1950 年代风格轻爵士配乐 + 马克笔沙沙声。
+"""音轨：旁白（本地语音合成）+ 1950 年代风格轻爵士配乐 + 马克笔沙沙声。
 
 全部在本地生成：
-- 旁白用 sherpa-onnx 运行 ZipVoice（零样本语音合成，模仿一段参考录音的音色和语气），
-  首次运行自动下载模型。相比逐字拼读的模型，它的分句和连读自然得多。
+- 旁白用 sherpa-onnx 运行，首次运行自动下载模型。两种声音可选（script.toml 的 voice）：
+  clear    （默认）先用 MeloTTS 念一句话作为参考录音，再让 ZipVoice 照着它的音色和语气念旁白。
+           MeloTTS 音色干净、节奏自然，ZipVoice 发音准确，两者结合最清楚。
+  melo     直接用 MeloTTS 中文女声（个别字发音不如 clear 准）。
+  zipvoice ZipVoice 模仿你提供的参考录音。录音要清晰、全频带（16kHz 以上采样），
+           否则合成结果会跟着沙哑或发闷。
 - 配乐用 numpy 合成：FM 电钢琴和弦、行走贝斯、鼓刷，摇摆节奏。
 - 沙沙声根据时间线上每一笔的起止时间和速度，由滤波噪声生成。
 """
@@ -19,17 +23,15 @@ SR = 44100
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(HERE, "build")
 RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
-MODEL_DIR = os.path.join(BUILD, "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia")
-MODEL_URL = RELEASE + "tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2"
+MELO_DIR = os.path.join(BUILD, "vits-melo-tts-zh_en")
+MELO_URL = RELEASE + "tts-models/vits-melo-tts-zh_en.tar.bz2"
+MELO_SPEED = 0.92           # 稍慢一点，更像纪录片解说
+ZIP_DIR = os.path.join(BUILD, "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia")
+ZIP_URL = RELEASE + "tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2"
 VOCODER = os.path.join(BUILD, "vocos_24khz.onnx")
 VOCODER_URL = RELEASE + "vocoder-models/vocos_24khz.onnx"
-# 参考男声：sherpa-onnx 完整版 ZipVoice 包里自带的示例录音（只取这一个文件）
-PROMPT_WAV = os.path.join(BUILD, "zipvoice_prompt.wav")
-PROMPT_ARCHIVE_URL = RELEASE + "tts-models/sherpa-onnx-zipvoice-distill-zh-en-emilia.tar.bz2"
-PROMPT_TEXT = "周日被我射熄火了，所以今天是周一。"
-# 参考录音语速偏慢。模型自带的 speed 参数大于 1 时短句会被截断，
-# 所以按原速合成，再用 ffmpeg 的 atempo 变速不变调。
-TEMPO = 1.35
+# ZipVoice 的 speed 参数大于 1 时短句会被截断，所以按原速合成，再用 atempo 变速不变调。
+ZIP_TEMPO = 1.0
 FLOW_STEPS = 4
 SENTENCE_GAP = 0.32         # 句与句之间的停顿（秒）
 
@@ -37,7 +39,7 @@ SENTENCE_GAP = 0.32         # 句与句之间的停顿（秒）
 MARKER_RMS = 0.01           # 马克笔沙沙声的平均音量，约 -40 dB
 MARKER_DUCK = 0.35          # 旁白说话时马克笔声再降到 35%（约 -9 dB）
 MUSIC_LEVEL = 0.20
-MUSIC_DUCK = 0.45           # 旁白说话时配乐降到 45%
+MUSIC_DUCK = 0.35           # 旁白说话时配乐降到 35%
 
 rng = np.random.default_rng(1956)
 
@@ -78,9 +80,6 @@ def smooth_env(env, ms):
 
 # ---------------------------------------------------------------- 旁白
 
-_tts = None
-
-
 def _download(url, path):
     print(f"下载 {os.path.basename(url)} ……", flush=True)
     os.makedirs(BUILD, exist_ok=True)
@@ -88,60 +87,107 @@ def _download(url, path):
     os.replace(path + ".part", path)
 
 
-def _ensure_model():
-    if not os.path.exists(os.path.join(MODEL_DIR, "lexicon.txt")):
-        archive = MODEL_DIR + ".tar.bz2"
-        _download(MODEL_URL, archive)
+def _ensure(dirpath, url, probe):
+    if not os.path.exists(os.path.join(dirpath, probe)):
+        archive = dirpath + ".tar.bz2"
+        _download(url, archive)
         with tarfile.open(archive) as t:
             t.extractall(BUILD)
         os.remove(archive)
-    if not os.path.exists(VOCODER):
-        _download(VOCODER_URL, VOCODER)
-    if not os.path.exists(PROMPT_WAV):
-        archive = PROMPT_WAV + ".tar.bz2"
-        _download(PROMPT_ARCHIVE_URL, archive)          # 约 630MB，只为取出参考录音
-        with tarfile.open(archive) as t:
-            member = next(m for m in t.getmembers() if m.name.endswith("/prompt.wav"))
-            with t.extractfile(member) as src, open(PROMPT_WAV, "wb") as dst:
-                dst.write(src.read())
-        os.remove(archive)
 
 
-_prompt = None
+class MeloVoice:
+    key = "melo"
 
-
-def _engine():
-    global _tts, _prompt
-    if _tts is None:
+    def __init__(self):
         import sherpa_onnx
-        _ensure_model()
-        m = MODEL_DIR + "/"
-        cfg = sherpa_onnx.OfflineTtsConfig(model=sherpa_onnx.OfflineTtsModelConfig(
-            zipvoice=sherpa_onnx.OfflineTtsZipvoiceModelConfig(
-                tokens=m + "tokens.txt", encoder=m + "encoder.int8.onnx",
-                decoder=m + "decoder.int8.onnx", vocoder=VOCODER,
-                data_dir=m + "espeak-ng-data", lexicon=m + "lexicon.txt"),
-            num_threads=os.cpu_count() or 4))
-        _tts = sherpa_onnx.OfflineTts(cfg)
-        x, sr = read_wav_mono(PROMPT_WAV)
-        _prompt = (x.tolist(), sr)
-    return _tts
+        _ensure(MELO_DIR, MELO_URL, "model.onnx")
+        m = MELO_DIR + "/"
+        self.tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                vits=sherpa_onnx.OfflineTtsVitsModelConfig(
+                    model=m + "model.onnx", lexicon=m + "lexicon.txt",
+                    tokens=m + "tokens.txt", dict_dir=m + "dict"),
+                num_threads=os.cpu_count() or 4),
+            rule_fsts=m + "date.fst," + m + "phone.fst," + m + "number.fst"))
+
+    def say(self, sent):
+        sent = sent.replace("：", "，").replace("；", "，")     # 词典里没有这两个标点
+        a = self.tts.generate(sent, sid=0, speed=MELO_SPEED)
+        return np.array(a.samples, dtype=np.float32), a.sample_rate
 
 
-def narrate(text, cache_name):
+class ZipVoice:
+    def __init__(self, prompt_wav, prompt_text):
+        import sherpa_onnx
+        _ensure(ZIP_DIR, ZIP_URL, "lexicon.txt")
+        if not os.path.exists(VOCODER):
+            _download(VOCODER_URL, VOCODER)
+        m = ZIP_DIR + "/"
+        self.tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                zipvoice=sherpa_onnx.OfflineTtsZipvoiceModelConfig(
+                    tokens=m + "tokens.txt", encoder=m + "encoder.int8.onnx",
+                    decoder=m + "decoder.int8.onnx", vocoder=VOCODER,
+                    data_dir=m + "espeak-ng-data", lexicon=m + "lexicon.txt"),
+                num_threads=os.cpu_count() or 4)))
+        x, sr = read_wav_mono(prompt_wav)
+        self.prompt = (x.tolist(), sr, prompt_text)
+        self.key = f"zipvoice_{os.path.splitext(os.path.basename(prompt_wav))[0]}_t{ZIP_TEMPO}"
+
+    def say(self, sent):
+        px, psr, ptxt = self.prompt
+        a = self.tts.generate(sent, prompt_text=ptxt, prompt_samples=px, sample_rate=psr,
+                              speed=1.0, num_steps=FLOW_STEPS)
+        x = np.array(a.samples, dtype=np.float32)
+        if ZIP_TEMPO != 1.0:
+            x = _atempo(x, a.sample_rate, ZIP_TEMPO)
+        return x, a.sample_rate
+
+
+CLEAR_PROMPT_TEXT = "那是一个安静的早晨，街道两旁的房子整整齐齐，人们像往常一样出门上班。"
+
+
+def clear_voice():
+    """用 MeloTTS 生成干净的参考录音，再交给 ZipVoice。"""
+    path = os.path.join(BUILD, "melo_prompt.wav")
+    if not os.path.exists(path):
+        x, sr = MeloVoice().say(CLEAR_PROMPT_TEXT)
+        x = _trim(x)
+        write_wav(path, 0.9 * x / np.abs(x).max(), sr)
+    return ZipVoice(path, CLEAR_PROMPT_TEXT)
+
+
+_voices = {}
+
+
+def get_voice(settings):
+    """settings 来自 script.toml 的 [settings]。"""
+    kind = settings.get("voice", "clear")
+    if kind not in _voices:
+        if kind == "clear":
+            _voices[kind] = clear_voice()
+        elif kind == "melo":
+            _voices[kind] = MeloVoice()
+        elif kind == "zipvoice":
+            _voices[kind] = ZipVoice(os.path.join(HERE, settings["prompt_wav"]),
+                                     settings["prompt_text"])
+        else:
+            raise ValueError(f"未知的 voice：{kind}（可选 clear / melo / zipvoice）")
+    return _voices[kind]
+
+
+def narrate(text, cache_name, voice):
     """把一段旁白（按句号/问号切句）合成为 SR 采样率的单声道数组，结果缓存为 wav。"""
     os.makedirs(BUILD, exist_ok=True)
-    path = os.path.join(BUILD, f"narration_zipvoice_t{TEMPO}_{cache_name}.wav")
+    path = os.path.join(BUILD, f"narration_{voice.key}_{cache_name}.wav")
     stamp = path + ".txt"
     if os.path.exists(path) and os.path.exists(stamp) and open(stamp).read() == text:
         return read_wav_mono(path)[0]
-    tts = _engine()
     pieces = []
     for sent in _split(text):
-        a = tts.generate(sent, prompt_text=PROMPT_TEXT, prompt_samples=_prompt[0],
-                         sample_rate=_prompt[1], speed=1.0, num_steps=FLOW_STEPS)
-        x = _atempo(np.array(a.samples, dtype=np.float32), a.sample_rate, TEMPO)
-        x = resample_poly(x, SR, a.sample_rate) if a.sample_rate != SR else x
+        x, sr = voice.say(sent)
+        x = resample_poly(x, SR, sr) if sr != SR else x
         pieces += [_trim(x), np.zeros(int(SENTENCE_GAP * SR), np.float32)]
     x = np.concatenate(pieces[:-1])
     x = 0.89 * x / (np.abs(x).max() + 1e-9)

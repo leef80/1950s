@@ -337,7 +337,8 @@ def build(picks):
     for i in picks:
         fn = SCENES[i]
         tl = fn()
-        voice = audio.narrate(SCRIPT[fn.__name__]["narration"], fn.__name__)
+        voice = audio.narrate(SCRIPT[fn.__name__]["narration"], fn.__name__,
+                              audio.get_voice(SCRIPT.get("settings", {})))
         tl.min_duration = NARRATION_START + len(voice) / audio.SR + 1.6
         scenes.append(tl)
         voices.append(voice)

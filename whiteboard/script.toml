@@ -9,6 +9,16 @@
 #            每行太长会自动缩小字号，建议不超过 36 个字。
 # 其他字段   画在画面里的字（标牌、对话框、试卷等），位置固定，尽量保持原有长度。
 
+[settings]
+# 旁白的声音：
+#   "clear"     （默认）MeloTTS 先念一句作为参考，ZipVoice 照着它的音色念：清晰、连读自然、发音准
+#   "melo"      直接用 MeloTTS 中文女声
+#   "zipvoice"  模仿你提供的参考录音（比如换成男声）。需要同时填 prompt_wav（相对 whiteboard/ 的路径）
+#               和 prompt_text（录音里说的原话）。录音要清晰、无杂音，5–10 秒，采样率 16kHz 以上。
+voice = "clear"
+# prompt_wav = "voices/my_voice.wav"
+# prompt_text = "录音里说的那句话。"
+
 [title_card]
 title = "组织人的一天"
 subtitle = "1956 年 · 美国"
