@@ -9,6 +9,7 @@
 import math
 import os
 import sys
+import tomllib
 
 from engine import (Timeline, arrow, check, circle, cloud, ellipse, rect,
                     render_film, rounded_rect, speech_bubble, text_width)
@@ -16,31 +17,55 @@ from figures import (alarm_clock, briefcase, car, house, man, reader, upper_body
                      woman)
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+# 所有文案（旁白、字幕、画面里的字）都在 script.toml 里
+with open(os.path.join(HERE, "script.toml"), "rb") as _f:
+    SCRIPT = tomllib.load(_f)
+
+
 def per_char(txt, rate=0.11):
     return max(0.6, len(txt) * rate)
+
+
+def fit(txt, size, max_w):
+    """文字太长时缩小字号，保证不超过 max_w 像素。"""
+    while size > 12 and text_width(txt, size) > max_w:
+        size -= 1
+    return size
 
 
 def caption(tl, t0, line, txt, rate=0.11):
     """顶部字幕：第 0 行是时间地点（大字），第 1、2 行是说明。返回结束时间。"""
     x, y, size = [(60, 34, 40), (60, 94, 30), (60, 138, 30)][line]
-    return tl.text(t0, t0 + per_char(txt, rate), x, y, txt, size)
+    return tl.text(t0, t0 + per_char(txt, rate), x, y, txt, fit(txt, size, 1160))
+
+
+def captions(tl, t, lines, first_gap=0.3, gap=0.1):
+    """依次写出说明字幕（第 1 行起）。"""
+    for i, txt in enumerate(lines):
+        t = caption(tl, t + (first_gap if i == 0 else gap), i + 1, txt)
+    return t
+
+
+def label(tl, t0, t1, x, y, txt, size, max_w):
+    return tl.text(t0, t1, x, y, txt, fit(txt, size, max_w))
 
 
 # ---------------------------------------------------------------- 片头
 
 def title_card():
-    tl = Timeline()
-    t = tl.text_center(0.4, 2.4, 640, 250, "组织人的一天", 76)
+    tl, c = Timeline(), SCRIPT["title_card"]
+    t = tl.text_center(0.4, 2.4, 640, 250, c["title"], fit(c["title"], 76, 1100))
     t = tl.strokes(t + 0.1, t + 0.8, [[(420, 352), (640, 346), (860, 352)]], width=5)
-    tl.text_center(t + 0.2, t + 1.6, 640, 380, "1956 年 · 美国", 36)
+    tl.text_center(t + 0.2, t + 1.6, 640, 380, c["subtitle"], fit(c["subtitle"], 36, 1100))
     return tl
 
 
 # ---------------------------------------------------------------- 1. 清晨出门
 
 def morning():
-    tl = Timeline()
-    t = caption(tl, 0.3, 0, "上午 6:45 · 帕克森林，芝加哥郊外")
+    tl, c = Timeline(), SCRIPT["morning"]
+    t = caption(tl, 0.3, 0, c["captions"][0])
     xs = [40, 440, 840]
     t = tl.strokes(t + 0.2, t + 0.8, [[(30, 480), (1250, 480)]], width=4)
     # 第一栋房子画得慢，后两栋越来越快——标准化的郊区
@@ -53,16 +78,15 @@ def morning():
         d = [2.2, 1.4, 1.1][i]
         t = tl.strokes(t + 0.1, t + d, man(x0 + 175, 660, 0.9), width=3.8, gap=0.02)
         t = tl.strokes(t + 0.05, t + d * 0.8, woman(x0 + 70, 660, 0.85), width=3.8, gap=0.02)
-    t = caption(tl, t + 0.3, 1, "三栋一样的房子，三辆一样的车，")
-    caption(tl, t + 0.1, 2, "三扇门在同一分钟打开。")
+    captions(tl, t, c["captions"][1:])
     return tl
 
 
 # ---------------------------------------------------------------- 2. 通勤火车
 
 def train():
-    tl = Timeline()
-    t = caption(tl, 0.3, 0, "上午 7:32 · 开往芝加哥的通勤火车")
+    tl, c = Timeline(), SCRIPT["train"]
+    t = caption(tl, 0.3, 0, c["captions"][0])
     t = tl.strokes(t + 0.2, t + 1.6, [
         rect(40, 200, 1240, 620),
         [(40, 600), (1240, 600)],
@@ -82,24 +106,23 @@ def train():
     for i, x in enumerate(xs):
         d = [3.0, 1.6, 1.3, 1.1, 1.0][i]
         t = tl.strokes(t + 0.1, t + d, reader(x, 600, 1.15), width=3.6, gap=0.02)
-    t = caption(tl, t + 0.3, 1, "同一班车，同一份报纸，同一个姿势。")
-    caption(tl, t + 0.3, 2, "车厢里很安静——没有人需要开口。")
+    captions(tl, t, c["captions"][1:], gap=0.3)
     return tl
 
 
 # ---------------------------------------------------------------- 3. 公司大楼 8:59
 
 def office():
-    tl = Timeline()
+    tl, c = Timeline(), SCRIPT["office"]
     xs = [700, 590, 480, 370, 260, 150]
-    t = caption(tl, 0.3, 0, "上午 8:59 · 公司总部")
+    t = caption(tl, 0.3, 0, c["captions"][0])
     t = tl.strokes(t + 0.2, t + 1.7, [
         [(820, 640), (820, 150), (1160, 150), (1160, 640)],
         [(870, 150), (870, 95), (1110, 95), (1110, 150)],
         [(990, 95), (990, 48)], ellipse(990, 42, 6, 6),
     ], width=5)
     t = tl.strokes(t, t + 0.7, [rect(840, 160, 1140, 198)], width=4)
-    t = tl.text_center(t, t + 1.2, 990, 164, "CONSOLIDATED CORP.", 24)
+    t = tl.text_center(t, t + 1.2, 990, 164, c["company"], fit(c["company"], 24, 280))
     clock = [circle(990, 262, 44), [(990, 262), (990, 228)], [(990, 262), (966, 262)]]
     clock += [[(990 + 37 * math.cos(math.radians(a)), 262 + 37 * math.sin(math.radians(a))),
                (990 + 42 * math.cos(math.radians(a)), 262 + 42 * math.sin(math.radians(a)))]
@@ -115,23 +138,23 @@ def office():
     for i, x in enumerate(xs[1:]):
         d = [1.2, 1.0, 0.85, 0.75, 0.65][i]
         t = tl.strokes(t + 0.08, t + d, man(x, 640), width=4, gap=0.015)
-    tl.text(t + 0.2, t + 3.0, 60, 662, "同样的帽子，同样的公文包，同样的 9:00。", 32)
+    label(tl, t + 0.2, t + 3.0, 60, 662, c["bottom"], 32, 1160)
     t += 3.2
     # 提线木偶：组织的横杆
     t = tl.strokes(t, t + 0.9, [rect(110, 258, 740, 296),
                                 [(425, 258), (425, 222)], [(385, 222), (465, 222)]], width=5)
-    t = tl.text(t, t + 0.7, 400, 260, "组织", 28)
+    t = tl.text_center(t, t + 0.7, 425, 260, c["bar"], fit(c["bar"], 28, 600))
     t = tl.strokes(t, t + 1.4, [[(x, 296), (x, 470)] for x in xs], width=2.5, gap=0.04)
     t = tl.strokes(t, t + 0.4, [[(740, 279), (790, 230), (840, 199)]], width=3.5)
-    caption(tl, t + 0.2, 1, "他不只是为组织工作——他属于组织。", rate=0.1)
+    captions(tl, t, c["captions"][1:], first_gap=0.2)
     return tl
 
 
 # ---------------------------------------------------------------- 4. 人格测试
 
 def personality_test():
-    tl = Timeline()
-    t = caption(tl, 0.3, 0, "上午 10:30 · 人事部的人格测试")
+    tl, c = Timeline(), SCRIPT["personality_test"]
+    t = caption(tl, 0.3, 0, c["captions"][0])
     # 书桌和答题的人
     t = tl.strokes(t + 0.2, t + 1.2, [
         rect(180, 470, 480, 484), rect(192, 484, 468, 620), [(330, 500), (330, 604)],
@@ -147,32 +170,31 @@ def personality_test():
         [(360, 466), (560, 196)], [(360, 466), (560, 636)],
         rect(560, 190, 1225, 640),
     ], width=3.2)
-    t = tl.text(t, t + 1.4, 590, 206, "人格测试 · 第 37 题", 32)
+    t = label(tl, t, t + 1.4, 590, 206, c["q1"], 32, 610)
     boxes = lambda y: [rect(592, y + 4, 618, y + 30)]
     t = tl.strokes(t + 0.1, t + 0.3, boxes(262), width=3)
-    t = tl.text(t, t + 1.6, 634, 262, "我喜欢一个人安静地读书。", 28)
+    t = label(tl, t, t + 1.6, 634, 262, c["q1_a"], 28, 570)
     t = tl.strokes(t + 0.1, t + 0.3, boxes(312), width=3)
-    t = tl.text(t, t + 1.8, 634, 312, "我喜欢参加聚会和团体活动。", 28)
+    t = label(tl, t, t + 1.8, 634, 312, c["q1_b"], 28, 570)
     t = tl.strokes(t + 0.5, t + 0.8, check(594, 316), width=5)
-    t = tl.text(t + 0.4, t + 1.2, 590, 392, "第 38 题", 32)
+    t = label(tl, t + 0.4, t + 1.2, 590, 392, c["q2"], 32, 610)
     t = tl.strokes(t + 0.1, t + 0.3, boxes(446), width=3)
-    t = tl.text(t, t + 1.6, 634, 446, "我常常怀疑上司的决定。", 28)
+    t = label(tl, t, t + 1.6, 634, 446, c["q2_a"], 28, 570)
     t = tl.strokes(t + 0.1, t + 0.3, boxes(496), width=3)
-    t = tl.text(t, t + 1.8, 634, 496, "我相信公司知道什么对我最好。", 28)
+    t = label(tl, t, t + 1.8, 634, 496, c["q2_b"], 28, 570)
     t = tl.strokes(t + 0.5, t + 0.8, check(594, 500), width=5)
     # 评语
     t = tl.strokes(t + 0.4, t + 0.9, [rounded_rect(900, 566, 1200, 624, 8)], width=5)
-    t = tl.text(t, t + 1.2, 918, 573, "合群 · 适应良好", 32)
-    t = caption(tl, t + 0.3, 1, "正确答案永远是：最合群的那一个。")
-    caption(tl, t + 0.2, 2, "怀特在书末附了一篇《如何在人格测试中作弊》。", rate=0.09)
+    t = tl.text_center(t, t + 1.2, 1050, 573, c["verdict"], fit(c["verdict"], 32, 270))
+    captions(tl, t, c["captions"][1:], gap=0.2)
     return tl
 
 
 # ---------------------------------------------------------------- 5. 委员会会议
 
 def meeting():
-    tl = Timeline()
-    t = caption(tl, 0.3, 0, "下午 2:00 · 委员会会议")
+    tl, c = Timeline(), SCRIPT["meeting"]
+    t = caption(tl, 0.3, 0, c["captions"][0])
     t = tl.strokes(t + 0.2, t + 1.4, [
         rect(80, 470, 880, 484), rect(92, 484, 868, 560),
         [(110, 560), (110, 620)], [(850, 560), (850, 620)],
@@ -192,28 +214,27 @@ def meeting():
         [(1066, 412), (1100, 395), (1130, 400), (1165, 360), (1205, 330)],
     ], width=3.6, gap=0.04)
     t = tl.strokes(t + 0.2, t + 0.8, speech_bubble(800, 382, 1010, 436, (950, 462)), width=3.5)
-    t = tl.text(t, t + 1.4, 818, 390, "大家都同意吧？", 28)
+    t = tl.text_center(t, t + 1.4, 905, 390, c["boss"], fit(c["boss"], 28, 190))
     # 每个人的回答都一样
     for i, x in enumerate(xs):
         t = tl.strokes(t + 0.15, t + 0.45, speech_bubble(x - 36, 318, x + 36, 354, (x, 370)),
                        width=3)
-        t = tl.text(t, t + 0.4, x - 21, 321, "同意", 22)
+        t = tl.text_center(t, t + 0.4, x, 321, c["reply"], fit(c["reply"], 22, 64))
     # 他心里其实有话
     t = tl.strokes(t + 0.6, t + 1.6, [
         circle(432, 306, 4), circle(452, 290, 6),
         cloud(560, 240, 118, 32),
     ], width=3)
-    t = tl.text(t, t + 1.4, 478, 226, "其实我觉得……", 26)
-    t = caption(tl, t + 0.4, 1, "他想说的话，留在了心里。")
-    caption(tl, t + 0.2, 2, "群体被当作智慧的源泉；异议，则被当作“不合群”。", rate=0.09)
+    t = tl.text_center(t, t + 1.4, 560, 226, c["thought"], fit(c["thought"], 26, 210))
+    captions(tl, t, c["captions"][1:], first_gap=0.4, gap=0.2)
     return tl
 
 
 # ---------------------------------------------------------------- 6. 后院聚会和调令
 
 def party():
-    tl = Timeline()
-    t = caption(tl, 0.3, 0, "傍晚 6:30 · 后院的烧烤聚会")
+    tl, c = Timeline(), SCRIPT["party"]
+    t = caption(tl, 0.3, 0, c["captions"][0])
     t = tl.strokes(t + 0.2, t + 0.6, [[(20, 640), (1260, 640)]], width=4)
     # 烤炉和烟
     t = tl.strokes(t + 0.1, t + 1.4, [
@@ -233,22 +254,25 @@ def party():
     t = tl.strokes(t + 0.2, t + 0.7, arrow(756, 512, 840, 450), width=3.5)
     t = tl.strokes(t + 0.1, t + 1.0, [rect(850, 220, 1230, 580), [(870, 290), (1210, 290)]],
                    width=4)
-    t = tl.text(t, t + 1.1, 872, 248, "CONSOLIDATED CORP.", 24)
-    t = tl.text(t + 0.1, t + 0.9, 872, 304, "人事调令", 36)
-    t = tl.text(t + 0.1, t + 1.3, 872, 366, "自下月 1 日起，", 28)
-    t = tl.text(t, t + 1.4, 872, 408, "调往堪萨斯城分部。", 28)
-    t = tl.text(t, t + 1.4, 872, 450, "请携家眷准时报到。", 28)
-    t = tl.text(t + 0.1, t + 0.8, 1060, 520, "—— 人事部", 24)
-    t = caption(tl, t + 0.4, 1, "公司一纸调令，他就搬家。")
-    caption(tl, t + 0.2, 2, "反正下一个郊区，也一模一样。")
+    # 卡片上的字：抬头、标题、正文若干行、落款（落款靠右）
+    lines = c["letter"]
+    t = label(tl, t, t + 1.1, 872, 248, lines[0], 24, 336)
+    t = label(tl, t + 0.1, t + 0.9, 872, 304, lines[1], 36, 336)
+    body = lines[2:-1]
+    for i, txt in enumerate(body):
+        t = label(tl, t + 0.05, t + per_char(txt, 0.12), 872, 366 + i * 42, txt, 28, 336)
+    sign = lines[-1]
+    sz = fit(sign, 24, 336)
+    t = tl.text(t + 0.1, t + 0.8, int(1210 - text_width(sign, sz)), 520, sign, sz)
+    captions(tl, t, c["captions"][1:], first_gap=0.4, gap=0.2)
     return tl
 
 
 # ---------------------------------------------------------------- 7. 深夜
 
 def night():
-    tl = Timeline()
-    t = caption(tl, 0.3, 0, "晚上 10:30")
+    tl, c = Timeline(), SCRIPT["night"]
+    t = caption(tl, 0.3, 0, c["captions"][0])
     t = tl.strokes(t + 0.2, t + 0.6, [[(20, 600), (1260, 600)]], width=4)
     # 窗户和月亮
     t = tl.strokes(t + 0.1, t + 1.4, [
@@ -285,54 +309,25 @@ def night():
         ellipse(1060, 264, 32, 6),
     ], width=3.8, gap=0.04)
     t = tl.strokes(t + 0.1, t + 0.8, briefcase(920, 600, 1.6), width=4)
-    t = caption(tl, t + 0.3, 1, "西装挂好，公文包放好，闹钟定在 6:30。")
-    t = caption(tl, t + 0.6, 2, "明天，再来一遍。", rate=0.2)
+    captions(tl, t, c["captions"][1:], gap=0.6)
     return tl
 
 
 # ---------------------------------------------------------------- 片尾
 
 def end_card():
-    tl = Timeline()
-    t = tl.text_center(0.3, 1.8, 640, 270, "他属于组织。", 56)
+    tl, c = Timeline(), SCRIPT["end_card"]
+    t = tl.text_center(0.3, 1.8, 640, 270, c["title"], fit(c["title"], 56, 1100))
     t = tl.strokes(t + 0.3, t + 0.8, [[(470, 352), (640, 347), (810, 352)]], width=4)
-    tl.text_center(t + 0.3, t + 2.4, 640, 380,
-                   "参考：威廉·H·怀特《组织人》（The Organization Man, 1956）", 26)
+    tl.text_center(t + 0.3, t + 2.4, 640, 380, c["source"], fit(c["source"], 26, 1160))
     return tl
 
 
 SCENES = [title_card, morning, train, office, personality_test, meeting, party, night,
           end_card]
 
-# 旁白：每个场景开始后 NARRATION_START 秒开始念。数字写成汉字，读得更自然。
+# 旁白在场景开始后 NARRATION_START 秒开始念，文字见 script.toml
 NARRATION_START = 0.7
-NARRATION = {
-    "title_card": "一九五六年，记者威廉怀特出版了一本书，书名叫，组织人。"
-                  "这是书里那种人的一天。",
-    "morning": "早上六点四十五分，芝加哥郊外的帕克森林。"
-               "这里的房子出自同一张图纸，车道上停着同一款新车。"
-               "三扇门在同一分钟打开，丈夫们提着同样的公文包出门，妻子们站在门口挥手。"
-               "在这里，和邻居不一样，才是需要解释的事。",
-    "train": "七点三十二分，开往芝加哥的通勤火车。"
-             "每个人都坐在习惯的位置上，翻开同一份报纸。"
-             "没有人交谈，也不需要交谈。他们要去的，其实是同一个地方。",
-    "office": "八点五十九分，公司总部。大钟就要指向九点，一排一模一样的人走进同一扇门。"
-              "怀特说，这些人不只是为组织工作，他们在精神上也属于组织。"
-              "他们把前途、身份，甚至想法，都交给了它。",
-    "personality_test": "上午十点半，人事部的人格测试。"
-                        "你喜欢一个人读书，还是参加团体活动？"
-                        "你会怀疑上司，还是相信公司知道什么对你最好？"
-                        "正确答案只有一个：最合群的那一个。"
-                        "怀特在书末甚至教读者如何作弊。尽量显得平庸、乐观、毫无棱角。",
-    "meeting": "下午两点，委员会会议。上司问：大家都同意吧？每个人都说，同意。"
-               "他心里其实有不同的想法，但他也说了，同意。"
-               "在组织里，群体被当作智慧的源泉，而个人的异议，只会被看成不合群。",
-    "party": "傍晚六点半，后院的烧烤聚会。邻居们聊着草坪、新车和升职。"
-             "这时，他收到一纸调令：下个月，调往堪萨斯城。他不会拒绝。"
-             "反正下一个郊区，也会有一样的房子，一样的邻居，一样的聚会。",
-    "night": "晚上十点半。西装挂好，公文包放好，闹钟定在六点半。明天，再来一遍。",
-    "end_card": "他得到了安稳的一生。代价是，他属于组织。",
-}
 
 
 def build(picks):
@@ -342,7 +337,7 @@ def build(picks):
     for i in picks:
         fn = SCENES[i]
         tl = fn()
-        voice = audio.narrate(NARRATION[fn.__name__], fn.__name__)
+        voice = audio.narrate(SCRIPT[fn.__name__]["narration"], fn.__name__)
         tl.min_duration = NARRATION_START + len(voice) / audio.SR + 1.6
         scenes.append(tl)
         voices.append(voice)
@@ -367,7 +362,7 @@ def soundtrack(scenes, voices, wav_path):
 if __name__ == "__main__":
     import subprocess
     import imageio_ffmpeg
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = HERE
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "organization_man_day.mp4")
     picks = [int(a) for a in sys.argv[2:]] or range(len(SCENES))
     scenes, voices = build(picks)

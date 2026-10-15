@@ -24,6 +24,12 @@ VOICE_SID = 63              # 低沉的中文男声
 VOICE_SPEED = 0.95
 SENTENCE_GAP = 0.32         # 句与句之间的停顿（秒）
 
+# 音量（线性幅度）。旁白峰值约 0.85、说话时平均约 -17 dB。
+MARKER_RMS = 0.01           # 马克笔沙沙声的平均音量，约 -40 dB
+MARKER_DUCK = 0.35          # 旁白说话时马克笔声再降到 35%（约 -9 dB）
+MUSIC_LEVEL = 0.20
+MUSIC_DUCK = 0.45           # 旁白说话时配乐降到 45%
+
 rng = np.random.default_rng(1956)
 
 
@@ -164,13 +170,17 @@ def marker_track(scenes, offsets, total):
     hiss = bandpass(noise, 1800, 7500) * 0.8 + bandpass(noise, 500, 1800) * 0.35
     # 白板表面不平整带来的颗粒感
     grain = 1 + 0.6 * lowpass(rng.standard_normal(n), 60) / 0.1
-    hiss *= np.clip(grain, 0.2, 2.2)
+    hiss *= np.clip(grain, 0.4, 1.6)
     out = hiss * env
-    # 落笔的轻微“嗒”声
+    # 按有声部分的平均响度归一，避免个别峰值决定整体音量
+    active = env > 0.05
+    out *= MARKER_RMS / (np.sqrt((out[active] ** 2).mean()) + 1e-12)
+    # 落笔的轻微“嗒”声：很轻，只做点缀
     tap_sig = np.interp(np.arange(n) / SR, np.arange(len(taps)) / rate, taps)
-    tap_sig = lowpass(tap_sig, 900) * 40
-    out += tap_sig * bandpass(noise, 200, 2500)
-    return 0.38 * out / (np.percentile(np.abs(out), 99.9) + 1e-9)
+    tap_sig = lowpass(tap_sig, 900)
+    tap = tap_sig * bandpass(noise, 200, 2500)
+    out += MARKER_RMS * 0.8 * tap / (np.abs(tap).max() + 1e-12)
+    return out
 
 
 def _stroke_len(pts):
@@ -271,9 +281,10 @@ def mix(narr, music, marker, total, fade_in=2.0, fade_out=4.0):
     narr, music, marker = (np.pad(x, (0, max(0, n - len(x))))[:n] for x in (narr, music, marker))
     # 旁白出现时把配乐压低（侧链闪避）
     voice_env = smooth_env((np.abs(narr) > 0.02).astype(float), 250).clip(0, 1)
-    duck = 1 - 0.55 * np.minimum(1, voice_env * 3)
+    speaking = np.minimum(1, voice_env * 3)
     t = np.arange(n) / SR
     fade = np.minimum(1, t / fade_in) * np.clip((total - t) / fade_out, 0, 1)
-    m = 0.20 * music * duck * fade
-    x = 0.95 * narr + m + marker
+    m = MUSIC_LEVEL * music * (1 - (1 - MUSIC_DUCK) * speaking) * fade
+    k = marker * (1 - (1 - MARKER_DUCK) * speaking)
+    x = 0.95 * narr + m + k
     return 0.95 * np.tanh(x)            # 软限幅，峰值不超过 0.95
