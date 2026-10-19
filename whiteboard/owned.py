@@ -1,11 +1,11 @@
-"""《我归组织所有》：75 秒白板手绘短视频。
+"""《我归组织所有》：八十秒上下的白板手绘短视频。
 
-1950 年代的一个组织人，第一人称讲他走不掉、挣不脱、认了命，又忍不住幻想。
+1950 年代的一个组织人，第一人称讲他走不掉、挣不脱、认了命，又忍不住幻想；片尾展示原书。
 灵感来自威廉·H·怀特《组织人》（The Organization Man, 1956）。
 文案、节奏和画面里的字都在 owned.toml 里；每样东西在旁白念到它的那一小句时画出来。
 
 用法: python3 owned.py [输出路径.mp4]
-      python3 owned.py --times            只合成旁白，打印每一拍念多久
+      python3 owned.py --times            只合成旁白，打印每一拍实际的起止时间
       python3 owned.py --stills 5 11.5    把这几个时刻的画面存成 build/stills/*.png
 """
 import math
@@ -28,11 +28,11 @@ BUILD = os.path.join(HERE, "build")
 with open(os.path.join(HERE, "owned.toml"), "rb") as _f:
     SCRIPT = tomllib.load(_f)
 SETTINGS = SCRIPT["settings"]
-BEATS = [k for k in SCRIPT if k != "settings"]
+SECTIONS = [k for k in SCRIPT if "time" in SCRIPT[k]]       # 按顺序排的每一拍，含片尾
+BEATS = [k for k in SECTIONS if "narration" in SCRIPT[k]]   # 有旁白的拍
 
 LEAD = 0.12             # 每一拍开始后多久开口
-TAIL = 0.15             # 每一拍结束前至少留这么多空
-MAX_TEMPO = 1.15        # 念不完时最多提速到这个倍数，再快就该删字了
+TAIL = 0.15             # 每一拍念完后至少留这么多空
 FADE = 0.25             # 节奏快：场景之间快速淡出
 PEN_LEAVES = 0.3
 PUNCT = "，。；：、？！“”"
@@ -63,24 +63,25 @@ def synth(name, text, voice):
     return x, spans
 
 
-def narration():
-    """每一拍的旁白，念不完就提速。返回 {拍名: (开口时刻, 音频, 句子时间表, 提速倍数)}，全片时间。"""
+NARR = {}      # {拍名: (开口时刻, 音频, [(句子, 起, 止), ...])}，全片时间
+TIMES = {}     # {拍名: (起, 止)}：实际排出来的时间
+
+
+def schedule():
+    """按 toml 的节奏排每一拍。旁白念不完就把这一拍拉长（不提速），后面的整体往后挪。"""
     voice = audio.get_voice(SETTINGS)
-    out = {}
-    for name in BEATS:
-        t0, t1 = SCRIPT[name]["time"]
-        x, spans = synth(name, SCRIPT[name]["narration"], voice)
-        start = t0 + (0.05 if t0 == 0 else LEAD)
-        k = max(1.0, len(x) / audio.SR / (t1 - TAIL - start))
-        if k > 1.0:
-            x = audio._atempo(x, audio.SR, k)
-        if k > MAX_TEMPO:
-            print(f"注意：{name} 的旁白太长，要提速到 {k:.2f} 倍才念得完，建议删几个字")
-        out[name] = (start, x, [(s, start + a / k, start + e / k) for s, a, e in spans], k)
-    return out
-
-
-NARR = {}
+    shift = 0.0
+    for name in SECTIONS:
+        t0, t1 = (t + shift for t in SCRIPT[name]["time"])
+        if name in BEATS:
+            x, spans = synth(name, SCRIPT[name]["narration"], voice)
+            start = t0 + (0.05 if t0 == 0 else LEAD)
+            end = math.ceil((start + len(x) / audio.SR + TAIL) * FPS) / FPS   # 对齐到整帧
+            if end > t1:
+                shift += end - t1
+                t1 = end
+            NARR[name] = (start, x, [(s, start + a, start + e) for s, a, e in spans])
+        TIMES[name] = (t0, t1)
 
 
 def hanzi(s):
@@ -153,11 +154,11 @@ def fit(txt, size, max_w):
 
 
 class Scene:
-    """一块白板，从全片 t0 画到 t1。cl() 把某一拍第 i 个小句的时间换成白板上的时间。"""
+    """一块白板，从第 first 拍开始画到第 last 拍结束。cl() 把某一拍第 i 个小句的时间换成白板上的时间。"""
 
-    def __init__(self, t0, t1, fade=FADE):
-        self.t0 = t0
-        self.tl = Timeline(duration=t1 - t0)
+    def __init__(self, first, last=None, fade=FADE):
+        self.t0 = TIMES[first][0]
+        self.tl = Timeline(duration=TIMES[last or first][1] - self.t0)
         self.tl.fade, self.tl.pen_leaves = fade, PEN_LEAVES
 
     def cl(self, name, i):
@@ -264,7 +265,7 @@ def dashed(x0, y0, x1, y1, dash=16, gap=12):
 # ---------------------------------------------------------------- 1. 我是一个组织人（0–6 秒）
 
 def opening():
-    s, h, idn = Scene(0, 6), SCRIPT["hook"], SCRIPT["identity"]
+    s, h, idn = Scene("hook", "identity"), SCRIPT["hook"], SCRIPT["identity"]
     (a0, a1), (c0, c1) = s.cl("hook", 0), s.cl("hook", 1)
     # “我归组织所有”：前半句画人，后半句给他挂上吊牌
     b0 = (a0 + a1) / 2
@@ -304,7 +305,7 @@ def opening():
 # ---------------------------------------------------------------- 2. 比尔、琼斯家、我的考评（6–12 秒）
 
 def competition():
-    s, c = Scene(6, 12), SCRIPT["competition"]
+    s, c = Scene("competition"), SCRIPT["competition"]
     cl = [s.cl("competition", i) for i in range(6)]
     # ① 晋升公告
     t = s.draw(cl[0][0], cl[0][0] + 0.55, [rect(60, 110, 380, 380), [(100, 380), (100, 470)],
@@ -339,7 +340,7 @@ def competition():
 # ---------------------------------------------------------------- 3. 走不掉：账单、养老金、人情网（12–30 秒）
 
 def binds():
-    s = Scene(12, 30)
+    s = Scene("fed_up", "bind_people")
     # 叹气
     f = [s.cl("fed_up", i) for i in range(2)]
     t = s.draw(0.1, f[0][1] - 0.3, man(600, 590, 2.1, arm="down") + [[(380, 592), (820, 592)]],
@@ -406,7 +407,7 @@ def binds():
 # ---------------------------------------------------------------- 4. 第一次挣扎：方案进了委员会（30–40 秒）
 
 def try1():
-    s, c = Scene(30, 40), SCRIPT["try1"]
+    s, c = Scene("try1"), SCRIPT["try1"]
     cl = [s.cl("try1", i) for i in range(6)]
     s.draw(0.1, cl[0][1], man(170, 590, 1.9, arm="point") + [[(60, 592), (330, 592)]], width=4, gap=0.01)
     bulb = [circle(318, 296, 28), [(306, 322), (306, 342), (330, 342), (330, 322)],
@@ -444,7 +445,7 @@ def try1():
 # ---------------------------------------------------------------- 5. 第二次挣扎：辞职信，和更小的座位（40–50 秒）
 
 def try2():
-    s, c = Scene(40, 50), SCRIPT["try2"]
+    s, c = Scene("try2"), SCRIPT["try2"]
     cl = [s.cl("try2", i) for i in range(9)]
     t = s.draw(0.1, cl[0][1], man(300, 590, 1.8, arm="letter") + [[(40, 592), (700, 592)]], width=4, gap=0.01)
     s.draw(cl[1][0], cl[1][1], [[(292, 262), (288, 236)], [(316, 262), (330, 240)], [(272, 268), (252, 252)]],
@@ -483,7 +484,7 @@ def try2():
 # ---------------------------------------------------------------- 6. 认命：儿子的作文，壁炉（50–60 秒）
 
 def acceptance():
-    s, c = Scene(50, 60), SCRIPT["acceptance"]
+    s, c = Scene("acceptance"), SCRIPT["acceptance"]
     cl = [s.cl("acceptance", i) for i in range(7)]
     moon = ellipse(70, 70, 22, 22, 60, 300) + ellipse(80, 70, 17, 20, 270, 90)[::-1]
     s.draw(cl[0][0], cl[0][1], [moon], width=3.5)
@@ -517,7 +518,7 @@ def acceptance():
 # ---------------------------------------------------------------- 7. 幻想：大富翁、孤胆英雄、我不同意（60–70 秒）
 
 def dream():
-    s, c = Scene(60, 70), SCRIPT["dream"]
+    s, c = Scene("dream"), SCRIPT["dream"]
     cl = [s.cl("dream", i) for i in range(7)]
     chair = [[(80, 520), (74, 372), (104, 348), (186, 348), (216, 372), (210, 520)],
              [(60, 520), (60, 478), (92, 468)], [(230, 520), (230, 478), (198, 468)],
@@ -559,11 +560,12 @@ def dream():
     return s.tl
 
 
-# ---------------------------------------------------------------- 8. 闹钟响了（70–75 秒）
+# ---------------------------------------------------------------- 8. 闹钟响了（70 秒起）
 
 def ending():
-    s, c = Scene(70, 75, fade=0.4), SCRIPT["ending"]
-    cl = [s.cl("ending", i) for i in range(4)]
+    s, c = Scene("ending", fade=0.4), SCRIPT["ending"]
+    cl = [s.cl("ending", i) for i in range(len(clauses("ending")))]
+    hang = max(2, len(cl) - 3)      # 念到“不归组织”时挂上吊牌
     t = s.draw(0.0, cl[0][1] - 0.2, alarm_clock(190, 250, 64, 6.5), width=4, gap=0.01)
     ring = [ellipse(190, 250, 92, 92, 200, 240), ellipse(190, 250, 110, 110, 205, 235),
             ellipse(190, 250, 92, 92, -60, -20), ellipse(190, 250, 110, 110, -55, -25)]
@@ -580,20 +582,44 @@ def ending():
             P((-22, -56), (-36, -28), (-6, -56)), P((22, -56), (36, -28), (6, -56))]
     a = cl[1][0]
     t = s.draw(a - 0.1, a + 0.35, [ellipse(640, 360, 150, 232), [(640, 128), (640, 100)]], width=4)
-    t = s.draw(t, cl[2][1] - 0.2, body, width=3.8, gap=0.01)
+    s.draw(t, cl[hang][0] - 0.1, body, width=3.8, gap=0.01)
     shape, hole = tag(220, 430, 440, 500, flip=True)
-    t = s.draw(t, t + 0.3, [[(626, 372), (520, 430), (hole[0] + 6, hole[1])]] + shape, width=3.2)
+    t = s.draw(cl[hang][0], cl[hang][0] + 0.3,
+               [[(626, 372), (520, 430), (hole[0] + 6, hole[1])]] + shape, width=3.2)
     s.write(t, t + 0.25, 234, 438, SCRIPT["hook"]["tag"][0], 20, 170)
     s.write(t + 0.2, t + 0.45, 234, 468, SCRIPT["hook"]["tag"][1], 20, 170)
     # 留白，一个大问号
-    a, b = cl[3]
-    t = s.write(a, a + 0.8, 1010, 110, "？", 250, 300)
-    src = SETTINGS["source"]
-    s.write(t, t + 0.4, int(1250 - text_width(src, 20)), 600, src, 20, 600)
+    a, b = cl[-1]
+    s.write(a, a + 0.8, 1010, 110, "？", 250, 300)
     return s.tl
 
 
-SCENES = [opening, competition, binds, try1, try2, acceptance, dream, ending]
+# ---------------------------------------------------------------- 9. 片尾：原书
+
+def end_card():
+    s, c = Scene("end_card", fade=0.6), SCRIPT["end_card"]
+    # 立着的一本书：封面、书顶、右侧的书页厚度
+    sx = lambda x: 26 * (x - 560) / 32          # 书顶斜边上 x 处比封面顶边高多少
+    book = [rect(300, 110, 560, 520), [(300, 110), (332, 84), (592, 84), (592, 494), (560, 520)],
+            [(560, 110), (592, 84)]]
+    book += [[(x, 110 - sx(x)), (x, 520 - sx(x))] for x in (569, 578, 586)]
+    t = s.draw(0.1, 0.8, book, width=4, gap=0.01)
+    t = s.write(t, t + 0.4, 430, 136, c["title"], 64, 230, center=True)
+    t = s.draw(t, t + 0.1, [[(340, 226), (520, 226)]], width=3)
+    t = s.write(t, t + 0.3, 430, 240, c["subtitle"], 24, 230, center=True)
+    # 一排一模一样的小人
+    t = s.draw(t, t + 0.5, sum((man(x, 408, 0.42) for x in (346, 388, 430, 472, 514)), []),
+               width=2.6, gap=0.005)
+    t = s.write(t, t + 0.25, 430, 428, c["author"], 26, 230, center=True)
+    t = s.write(t, t + 0.15, 430, 470, c["year"], 22, 230, center=True)
+    # 右边：书里的一句话。写完后至少留两秒让人读
+    for i, line in enumerate(c["quote"]):
+        t = s.write(t + 0.05, t + 0.07 * len(line), 660, 210 + 62 * i, line, 36, 580)
+    s.write(t + 0.05, t + 0.35, 660, 230 + 62 * len(c["quote"]), c["quote_from"], 22, 580)
+    return s.tl
+
+
+SCENES = [opening, competition, binds, try1, try2, acceptance, dream, ending, end_card]
 
 
 # ---------------------------------------------------------------- 声音
@@ -612,11 +638,11 @@ def soundtrack(scenes, wav_path):
     total = sum(tl.duration for tl in scenes)
     voice = np.zeros(int(total * audio.SR) + audio.SR)
     for name in BEATS:
-        start, x, _, _ = NARR[name]
+        start, x, _ = NARR[name]
         i = int(start * audio.SR)
         voice[i:i + len(x)] += x
     ring = alarm_ring()
-    i = int(SCRIPT["ending"]["time"][0] * audio.SR)
+    i = int(TIMES["ending"][0] * audio.SR)
     voice[i:i + len(ring)] += ring
     print("合成配乐和马克笔声……", flush=True)
     mixed = audio.mix(voice, audio.music_track(total), audio.marker_track(scenes, offsets, total),
@@ -643,11 +669,12 @@ def stills(scenes, times):
 
 
 if __name__ == "__main__":
-    NARR.update(narration())
+    schedule()
     if "--times" in sys.argv:
-        for name in BEATS:
-            start, x, spans, k = NARR[name]
-            print(f"{name:13s} {SCRIPT[name]['time']}  念完 {start + len(x) / audio.SR:5.2f}  提速 {k:.2f}")
+        for name in SECTIONS:
+            t0, t1 = TIMES[name]
+            said = f"念完 {NARR[name][0] + len(NARR[name][1]) / audio.SR:6.2f}" if name in NARR else ""
+            print(f"{name:13s} 原定 {SCRIPT[name]['time']}  实际 {t0:6.2f}–{t1:6.2f}  {said}")
         sys.exit()
     scenes = [fn() for fn in SCENES]
     if "--stills" in sys.argv:
