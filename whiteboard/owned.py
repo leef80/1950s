@@ -7,6 +7,7 @@
 用法: python3 owned.py [输出路径.mp4]
       python3 owned.py --times            只合成旁白，打印每一拍实际的起止时间
       python3 owned.py --stills 5 11.5    把这几个时刻的画面存成 build/stills/*.png
+      python3 owned.py --cover            只画封面，存成 organization_man_owned_cover.png
 """
 import math
 import os
@@ -622,6 +623,43 @@ def end_card():
 SCENES = [opening, competition, binds, try1, try2, acceptance, dream, ending, end_card]
 
 
+# ---------------------------------------------------------------- 封面
+
+def cover(path):
+    """视频封面：吊在“组织”横杆下的主角，脖子上挂着吊牌；右边是片名。存成 png。"""
+    c, h = SCRIPT["cover"], SCRIPT["hook"]
+    tl = Timeline(duration=6.0)
+    tl.fade, tl.pen_leaves = 0.01, 1.0
+    t = tl.strokes(0.0, 1.2, man(300, 640, 2.9) + [[(150, 642), (470, 642)]], width=5.5, gap=0.01)
+    # 提线木偶的横杆和线
+    t = tl.strokes(t, t + 0.4, [rect(170, 62, 430, 104), [(300, 62), (300, 30)], [(256, 30), (344, 30)]],
+                   width=5)
+    t = tl.text_center(t, t + 0.3, 300, 66, c["bar"], fit(c["bar"], 30, 240))
+    t = tl.strokes(t, t + 0.4, [[(300, 104), (300, 158)], [(200, 104), (201, 448)], [(400, 104), (387, 448)]],
+                   width=2.6)
+    # 吊牌
+    shape, hole = tag(470, 300, 800, 392)
+    t = tl.strokes(t, t + 0.4, [[(317, 310), (400, 312), hole]] + shape, width=4)
+    t = tl.text(t, t + 0.3, 514, 310, h["tag"][0], fit(h["tag"][0], 30, 270))
+    t = tl.text(t, t + 0.3, 514, 352, h["tag"][1], fit(h["tag"][1], 30, 270))
+    # 片名、年代、出处
+    title = SETTINGS["title"]
+    t = tl.text(t, t + 0.6, 640, 86, title, fit(title, 96, 600))
+    t = tl.strokes(t, t + 0.2, [[(640, 222), (900, 216), (1210, 222)]], width=5)
+    t = tl.text(t, t + 0.3, 640, 440, h["era"], fit(h["era"], 44, 360))
+    fx, fy = 1040, 436
+    flag = [[(fx, fy - 6), (fx, fy + 84)], rect(fx, fy, fx + 110, fy + 64), rect(fx, fy, fx + 44, fy + 32)]
+    flag += [[(fx + (44 if i < 4 else 0), fy + 64 * i / 7), (fx + 110, fy + 64 * i / 7)] for i in range(1, 7)]
+    flag += [circle(fx + 9 + 13 * i, fy + 9 + 13 * j, 1.6) for i in range(3) for j in range(2)]
+    t = tl.strokes(t, t + 0.3, flag, width=3, gap=0.005)
+    tl.text(t, t + 0.3, 640, 540, c["note"], fit(c["note"], 28, 600))
+    frames = scene_frames(tl)
+    for f, frame in enumerate(frames):
+        if f == int(5.5 * FPS):      # 画完、笔已经移开
+            frame.save(path)
+            return path
+
+
 # ---------------------------------------------------------------- 声音
 
 def alarm_ring(dur=0.85):
@@ -669,6 +707,9 @@ def stills(scenes, times):
 
 
 if __name__ == "__main__":
+    if "--cover" in sys.argv:
+        print(cover(os.path.join(HERE, "organization_man_owned_cover.png")))
+        sys.exit()
     schedule()
     if "--times" in sys.argv:
         for name in SECTIONS:

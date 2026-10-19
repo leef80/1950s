@@ -189,3 +189,11 @@ quote_from = "—— 威廉·H·怀特《组织人》导论"
 #       The ones I am talking about belong to it as well.
 #       引文是我照英文译的，你手上的中译本如果译法不同，可以换成书里的原话。
 # 想让片尾也念出来，在这里加一行 narration 就行，字幕会自动跟上。
+
+
+# ================================================================ 封面（python3 whiteboard/owned.py --cover）
+
+[cover]
+# 片名用 settings 里的 title，吊牌和年代用开场 hook 里的字
+bar = "组织"                                        # 提线木偶横杆上的字
+note = "灵感来自 威廉·H·怀特《组织人》（1956）"     # 片名下面最后一行小字
