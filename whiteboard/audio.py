@@ -1,10 +1,12 @@
 """音轨：旁白（本地语音合成）+ 1950 年代风格轻爵士配乐 + 马克笔沙沙声。
 
 全部在本地生成：
-- 旁白用 sherpa-onnx 运行，首次运行自动下载模型。两种声音可选（script.toml 的 voice）：
+- 旁白用 sherpa-onnx 运行，首次运行自动下载模型。几种声音可选（文案 toml 里的 voice）：
   clear    （默认）先用 MeloTTS 念一句话作为参考录音，再让 ZipVoice 照着它的音色和语气念旁白。
            MeloTTS 音色干净、节奏自然，ZipVoice 发音准确，两者结合最清楚。
   melo     直接用 MeloTTS 中文女声（个别字发音不如 clear 准）。
+  male     和 clear 一样，只是参考录音换成 Kokoro 的男声（speaker 选说话人）。
+  kokoro   直接用 Kokoro 中文（speaker 58–102 大多是男声），语速偏慢。
   zipvoice ZipVoice 模仿你提供的参考录音。录音要清晰、全频带（16kHz 以上采样），
            否则合成结果会跟着沙哑或发闷。
 - 配乐用 numpy 合成：FM 电钢琴和弦、行走贝斯、鼓刷，摇摆节奏。
@@ -28,6 +30,8 @@ MELO_URL = RELEASE + "tts-models/vits-melo-tts-zh_en.tar.bz2"
 MELO_SPEED = 0.92           # 稍慢一点，更像纪录片解说
 ZIP_DIR = os.path.join(BUILD, "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia")
 ZIP_URL = RELEASE + "tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2"
+KOKORO_DIR = os.path.join(BUILD, "kokoro-int8-multi-lang-v1_1")
+KOKORO_URL = RELEASE + "tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2"
 VOCODER = os.path.join(BUILD, "vocos_24khz.onnx")
 VOCODER_URL = RELEASE + "vocoder-models/vocos_24khz.onnx"
 # ZipVoice 的 speed 参数大于 1 时短句会被截断，所以按原速合成，再用 atempo 变速不变调。
@@ -145,7 +149,40 @@ class ZipVoice:
         return x, a.sample_rate
 
 
+class KokoroVoice:
+    """Kokoro v1.1 中文。speaker 是说话人编号，58–102 大多是男声。"""
+
+    def __init__(self, speaker):
+        import sherpa_onnx
+        _ensure(KOKORO_DIR, KOKORO_URL, "model.int8.onnx")
+        m = KOKORO_DIR + "/"
+        self.tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
+                    model=m + "model.int8.onnx", voices=m + "voices.bin",
+                    tokens=m + "tokens.txt", data_dir=m + "espeak-ng-data",
+                    dict_dir=m + "dict", lexicon=m + "lexicon-us-en.txt," + m + "lexicon-zh.txt"),
+                num_threads=os.cpu_count() or 4),
+            rule_fsts=m + "date-zh.fst," + m + "phone-zh.fst," + m + "number-zh.fst"))
+        self.sid = speaker
+        self.key = f"kokoro{speaker}"
+
+    def say(self, sent):
+        a = self.tts.generate(sent, sid=self.sid, speed=1.0)
+        return np.array(a.samples, dtype=np.float32), a.sample_rate
+
+
 CLEAR_PROMPT_TEXT = "那是一个安静的早晨，街道两旁的房子整整齐齐，人们像往常一样出门上班。"
+
+
+def male_voice(speaker):
+    """用 Kokoro 男声念参考录音，再交给 ZipVoice（和 clear 同样的做法）。"""
+    path = os.path.join(BUILD, f"kokoro{speaker}_prompt.wav")
+    if not os.path.exists(path):
+        x, sr = KokoroVoice(speaker).say(CLEAR_PROMPT_TEXT)
+        x = _trim(x)
+        write_wav(path, 0.9 * x / np.abs(x).max(), sr)
+    return ZipVoice(path, CLEAR_PROMPT_TEXT)
 
 
 def clear_voice():
@@ -164,17 +201,23 @@ _voices = {}
 def get_voice(settings):
     """settings 来自 script.toml 的 [settings]。"""
     kind = settings.get("voice", "clear")
-    if kind not in _voices:
+    speaker = settings.get("speaker", 60)
+    key = (kind, speaker)
+    if key not in _voices:
         if kind == "clear":
-            _voices[kind] = clear_voice()
+            _voices[key] = clear_voice()
         elif kind == "melo":
-            _voices[kind] = MeloVoice()
+            _voices[key] = MeloVoice()
         elif kind == "zipvoice":
-            _voices[kind] = ZipVoice(os.path.join(HERE, settings["prompt_wav"]),
-                                     settings["prompt_text"])
+            _voices[key] = ZipVoice(os.path.join(HERE, settings["prompt_wav"]),
+                                    settings["prompt_text"])
+        elif kind == "male":
+            _voices[key] = male_voice(speaker)
+        elif kind == "kokoro":
+            _voices[key] = KokoroVoice(speaker)
         else:
-            raise ValueError(f"未知的 voice：{kind}（可选 clear / melo / zipvoice）")
-    return _voices[kind]
+            raise ValueError(f"未知的 voice：{kind}（可选 clear / melo / zipvoice / male / kokoro）")
+    return _voices[key]
 
 
 def narrate(text, cache_name, voice):

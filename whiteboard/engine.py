@@ -149,6 +149,8 @@ class Timeline:
         self.min_duration = 0.0     # 例如旁白比画面长时，用它把场景撑长
         self.narration = ""
         self.items = []
+        self.fade = FADE            # 节奏快的片子可以把淡出和收笔调短
+        self.pen_leaves = PEN_LEAVES
 
     @property
     def duration(self):
@@ -264,15 +266,16 @@ def scene_frames(tl):
         if pen:
             last_pen = pen
         frame = canvas.reduce(SS)
-        if last_pen and t < tl.duration - PEN_LEAVES:
+        if last_pen and t < tl.duration - tl.pen_leaves:
             draw_marker(frame, *last_pen)
-        fade = (t - (tl.duration - FADE)) / FADE
+        fade = (t - (tl.duration - tl.fade)) / tl.fade
         if fade > 0:
             frame = Image.blend(frame, paper, min(1.0, fade))
         yield frame
 
 
-def render_film(scenes, out_path):
+def render_film(scenes, out_path, overlay=None):
+    """overlay(frame, t)：可选，在每一帧上再画东西（比如字幕），t 是全片时间。"""
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     proc = subprocess.Popen([
         ffmpeg, "-y", "-loglevel", "error",
@@ -280,9 +283,13 @@ def render_film(scenes, out_path):
         "-c:v", "libx264", "-preset", "slow", "-crf", "20", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", out_path,
     ], stdin=subprocess.PIPE)
+    n = 0
     for i, tl in enumerate(scenes):
         print(f"渲染场景 {i + 1}/{len(scenes)}（{tl.duration:.0f} 秒）", flush=True)
         for frame in scene_frames(tl):
+            if overlay:
+                overlay(frame, n / FPS)
             proc.stdin.write(frame.tobytes())
+            n += 1
     proc.stdin.close()
     proc.wait()
