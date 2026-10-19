@@ -265,13 +265,14 @@ def dashed(x0, y0, x1, y1, dash=16, gap=12):
 
 def opening():
     s, h, idn = Scene(0, 6), SCRIPT["hook"], SCRIPT["identity"]
-    (a0, a1), (b0, b1), (c0, c1) = (s.cl("hook", i) for i in range(3))
-    s.draw(0.0, a1, man(330, 600, 2.3) + [[(200, 602), (470, 602)]], width=4.2, gap=0.01)
-    # 脖子上的吊牌
+    (a0, a1), (c0, c1) = s.cl("hook", 0), s.cl("hook", 1)
+    # “我归组织所有”：前半句画人，后半句给他挂上吊牌
+    b0 = (a0 + a1) / 2
+    s.draw(0.0, b0, man(330, 600, 2.3) + [[(200, 602), (470, 602)]], width=4.2, gap=0.01)
     shape, hole = tag(462, 310, 770, 394)
-    t = s.draw(b0, b0 + 0.35, [[(344, 340), (400, 336), hole]] + shape, width=3.5)
-    t = s.write(t, t + 0.3, 506, 320, h["tag"][0], 26, 250)
-    s.write(t, b1 + 0.15, 506, 356, h["tag"][1], 26, 250)
+    t = s.draw(b0, b0 + 0.3, [[(344, 340), (400, 336), hole]] + shape, width=3.5)
+    t = s.write(t, t + 0.25, 506, 320, h["tag"][0], 26, 250)
+    s.write(t, max(t + 0.2, a1), 506, 356, h["tag"][1], 26, 250)
     # 星条旗和年代
     fx, fy = 1010, 80
     flag = [[(fx, fy - 10), (fx, fy + 160)], rect(fx, fy, fx + 180, fy + 110), rect(fx, fy, fx + 72, fy + 55)]

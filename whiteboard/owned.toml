@@ -22,22 +22,23 @@
 [settings]
 title = "我归组织所有"                          # 片名，只用作文件名，不单独占时间
 source = "参考：威廉·H·怀特《组织人》，1956"   # 结尾角落的小字
-# 旁白的声音（对应发给你的四个试听）：
-#   男声A  voice = "male",   speaker = 60   Kokoro 男声念参考句，ZipVoice 照着念：语速合适、发音准
+# 旁白的声音：
+#   女声   voice = "clear"                  和《组织人的一天》同一个声音。女声念男人的第一人称，
+#                                           像在朗诵别人的故事，留出距离感（现在用的是这个）
+#   男声A  voice = "male",   speaker = 60   Kokoro 男声念参考句，ZipVoice 照着念
 #   男声B  voice = "male",   speaker = 62
 #   男声C  voice = "kokoro", speaker = 60   直接用 Kokoro 男声，偏慢，会被提速
 #   男声D  voice = "kokoro", speaker = 62
 #   也可以 voice = "zipvoice" 模仿你自己的录音，需要再填 prompt_wav 和 prompt_text（见 script.toml 的说明）
-voice = "male"
-speaker = 60
+voice = "clear"
 subtitles = true      # 底部同步字幕
 
 
 # ================================================================ 第一部分：噱头（0–3 秒）
 
 [hook]
-time = [0, 3]         # 3 秒 ≈ 12 字；超了一些，开头故意念快一点
-narration = "我是一个组织人，我归组织所有，我在美国。"
+time = [0, 3]         # 3 秒 ≈ 12 字
+narration = "我归组织所有，我在美国。"
 scene = """几笔画出一个穿西装的小人（主角），脖子上挂一个商品吊牌；
 右上角一面小星条旗，旗下写着年代，表明这是历史上的美国。
 这个吊牌是全片的符号，结尾会再出现一次。"""
